@@ -1,121 +1,173 @@
-using System;
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
+[RequireComponent(typeof(Rigidbody2D))]
 public class PlayerMovement : MonoBehaviour
 {
-    public float rotationSpeed = 5.0f;
-    public float acceleration = 10.0f;
-    public float maxSpeed = 20.0f;
-    public float distancePerTap = 1.0f; // Distance parcourue par tap
+    public float rotationSpeed = 180.0f;
+    public float acceleration = 2.0f;
+    public float carryingSpeedMultiplier = .75f;
+    public float chargeSpeed = 2.0f;
+    public float maxDashDistance = 10.0f;
+    public float distancePerTap = 1.0f;
+    public float stunDuration = 2.0f;
+    public float dropDistance = -1.0f;
+    public float dashCollisionRadius = 1.0f;
+    public int raycastHitsCount = 5;
 
-    private float currentSpeed = 0.0f;
-    private Vector2 rotationInput;
-    private float distanceTraveled = 0.0f;
-    private GameObject carriedObject; // Référence à l'objet porté
-    private bool isStunned = false;
-    private float stunEndTime;
+    private Rigidbody2D _rb;
+    private Transform _transform;
+    private float _currentSpeed;
+    private float _currentCharge;
+    private Vector2 _rotationInput;
+    private float _distanceTraveled;
+    private GameObject _carriedObject;
+    private bool _isStunned;
+    private bool _isCharging;
+    private float _stunEndTime;
+    private RaycastHit2D[] _hits;
 
-    private PlayerInput playerInput;
-
-    private void OnEnable()
+    private bool CanMove
     {
-        playerInput = GetComponent<PlayerInput>();
-
-        // Activez l'Input Action Map correspondant à votre carte d'actions
-        playerInput.actions.FindActionMap("PlayerControls").Enable();
-
-        playerInput.actions["Rotate"].performed += OnRotatePerformed;
-        playerInput.actions["Rotate"].canceled += OnRotateCanceled;
-        playerInput.actions["Accelerate"].performed += OnAcceleratePerformed;
+        get => !_isStunned && !_isCharging && Mathf.Approximately(_currentCharge, 0f);
     }
 
-    private void OnDisable()
+    private void Awake()
     {
-        // Désactivez les callbacks lorsque le script est désactivé
-        var playerControls = playerInput.actions.FindActionMap("PlayerControls");
-        playerControls.Disable();
-
-        playerControls["Rotate"].performed -= OnRotatePerformed;
-        playerControls["Rotate"].canceled -= OnRotateCanceled;
-        playerControls["Accelerate"].performed -= OnAcceleratePerformed;
+        _rb = GetComponent<Rigidbody2D>();
+        _transform = transform;
+        _hits = new RaycastHit2D[raycastHitsCount];
     }
 
     private void OnRotatePerformed(InputAction.CallbackContext context)
     {
-        rotationInput = context.ReadValue<Vector2>();
         // Utilisez rotationInput pour effectuer la rotation du personnage ici
-    }
-
-    private void OnRotateCanceled(InputAction.CallbackContext context)
-    {
-        // Réinitialisez la rotation lorsque le joystick est relâché
-        rotationInput = Vector2.zero;
+        _rotationInput = context.canceled ? Vector2.zero : context.ReadValue<Vector2>();
     }
 
     private void OnAcceleratePerformed(InputAction.CallbackContext context)
     {
-        if (distanceTraveled < distancePerTap && !isStunned)
-        {
-            currentSpeed = acceleration;
-        }
+        if (context.canceled || !CanMove || _distanceTraveled >= distancePerTap)
+            return;
+
+        _currentSpeed = acceleration;
+
+        if (_carriedObject)
+            _currentSpeed *= carryingSpeedMultiplier;
+    }
+
+    private void OnDashPerformed(InputAction.CallbackContext context)
+    {
+        _isCharging = !context.canceled;
     }
 
     private void Update()
     {
-        if (!isStunned)
+        if (_isCharging)
+            _currentCharge += chargeSpeed * Time.deltaTime;
+
+        if (!_isStunned)
         {
             // Appliquez la rotation en fonction de rotationInput
-            transform.Rotate(new Vector3(0, 0, rotationInput.x * rotationSpeed * Time.deltaTime));
+            _transform.Rotate(new Vector3(0, 0, _rotationInput.x * rotationSpeed * Time.deltaTime));
 
-            if (currentSpeed > 0)
-            {
-                float distanceThisFrame = currentSpeed * Time.deltaTime;
-                distanceTraveled += distanceThisFrame;
-
-                if (distanceTraveled >= distancePerTap)
-                {
-                    currentSpeed = 0f;
-                    distanceTraveled = 0f;
-                }
-
-                // Appliquez la vitesse au mouvement du personnage
-                Vector3 movement = new Vector3(0, distanceThisFrame, 0);
-                transform.Translate(movement);
-            }
+            TryDash();
+            TryMove();
         }
-        else if (Time.time >= stunEndTime)
+        else if (Time.time >= _stunEndTime)
         {
-            isStunned = false;
+            _isStunned = false;
         }
     }
 
-    private void OnCollisionEnter(Collision collision)
+    private void TryDash()
     {
-        if (!isStunned && collision.gameObject.CompareTag("Collectible"))
-        {
-            // Le joueur a ramassé un objet collectible
-            carriedObject = collision.gameObject;
+        if (_isStunned || _isCharging || Mathf.Approximately(_currentCharge, 0))
+            return;
 
-            // Désactivez l'objet collectible pour le "ramasser"
-            carriedObject.SetActive(false);
+        _currentCharge = Mathf.Min(_currentCharge, maxDashDistance);
+        Vector2 startPos = _rb.position;
+        Vector2 dir = _transform.up;
+        Vector2 translation = dir * _currentCharge;
+        _rb.MovePosition(startPos + translation);
+
+        int hitCount = Physics2D.CircleCastNonAlloc(startPos, dashCollisionRadius, dir, _hits, _currentCharge);
+
+        for (int i = 0; i < hitCount; i++)
+        {
+            RaycastHit2D hit = _hits[i];
+
+            if (hit.transform == _transform)
+                continue;
+
+            PlayerMovement player = hit.transform.GetComponent<PlayerMovement>();
+
+            if (player)
+                player.Stun();
         }
-        else if (carriedObject != null && collision.gameObject.CompareTag("Player"))
+
+        _currentCharge = 0;
+    }
+
+    private void TryMove()
+    {
+        if (_currentSpeed <= 0)
+            return;
+
+        float distanceThisFrame = _currentSpeed * Time.deltaTime;
+        _distanceTraveled += distanceThisFrame;
+
+        if (_distanceTraveled >= distancePerTap)
         {
-            // Un autre joueur touche le joueur portant l'objet
-            // Étourdissez le joueur pendant un certain temps (par exemple, 2 secondes)
-            isStunned = true;
-            stunEndTime = Time.time + 2.0f;
+            _currentSpeed = 0f;
+            _distanceTraveled = 0f;
+        }
 
-            // Réactivez l'objet collectible et placez-le à la position actuelle du joueur
-            carriedObject.SetActive(true);
-            carriedObject.transform.position = transform.position;
+        // Appliquez la vitesse au mouvement du personnage
+        Vector2 movement = _transform.up * distanceThisFrame;
+        _rb.MovePosition(_rb.position + movement);
+    }
 
-            // Réinitialisez la référence à l'objet porté
-            carriedObject = null;
+    private void OnTriggerEnter2D(Collider2D other)
+    {
+        if (!_isStunned && other.gameObject.CompareTag("Collectible"))
+        {
+            _carriedObject = other.gameObject;
+            _carriedObject.SetActive(false);
+        }
+        else if (_carriedObject != null && other.gameObject.CompareTag("Player"))
+        {
+            Stun();
         }
     }
-}
 
+    private void Stun()
+    {
+        _isStunned = true;
+        _stunEndTime = Time.time + stunDuration;
+        _isCharging = false;
+        _currentCharge = 0;
+
+        DropObject();
+    }
+
+    private void DropObject()
+    {
+        if (!_carriedObject)
+            return;
+
+        _carriedObject.SetActive(true);
+        _carriedObject.transform.position = _transform.position + _transform.up * dropDistance;
+        _carriedObject = null;
+    }
+
+#if UNITY_EDITOR
+    private void OnDrawGizmos()
+    {
+        Color color = Gizmos.color;
+        Gizmos.color = Color.cyan;
+        Gizmos.DrawWireSphere(transform.position, dashCollisionRadius);
+        Gizmos.color = color;
+    }
+#endif
+}
