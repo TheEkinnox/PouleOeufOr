@@ -26,6 +26,8 @@ public class PlayerMovement : MonoBehaviour
     private bool _isCharging;
     private float _stunEndTime;
     private RaycastHit2D[] _hits;
+    private float _dashCooldown = -1.0f;
+
 
     private bool CanMove
     {
@@ -63,6 +65,16 @@ public class PlayerMovement : MonoBehaviour
 
     private void Update()
     {
+        if (_dashCooldown > 0)
+        {
+            _dashCooldown -= Time.deltaTime;
+
+            if (_dashCooldown <= 0)
+            {
+                _dashCooldown = -1.0f;
+            }
+        }
+
         if (_isCharging)
             _currentCharge += chargeSpeed * Time.deltaTime;
 
@@ -82,7 +94,7 @@ public class PlayerMovement : MonoBehaviour
 
     private void TryDash()
     {
-        if (_isStunned || _isCharging || Mathf.Approximately(_currentCharge, 0))
+        if (_isStunned || _isCharging || Mathf.Approximately(_currentCharge, 0) || _dashCooldown > 0)
             return;
 
         _currentCharge = Mathf.Min(_currentCharge, maxDashDistance);
@@ -107,6 +119,7 @@ public class PlayerMovement : MonoBehaviour
         }
 
         _currentCharge = 0;
+        _dashCooldown = 5.0f; // Temps de recharge en secondes
     }
 
     private void TryMove()

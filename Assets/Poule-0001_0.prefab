@@ -241,9 +241,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   rotationSpeed: 180
-  acceleration: 2
+  acceleration: 10
   carryingSpeedMultiplier: 0.75
-  chargeSpeed: 2
+  chargeSpeed: 1
   maxDashDistance: 5
   distancePerTap: 0.2
   stunDuration: 2
